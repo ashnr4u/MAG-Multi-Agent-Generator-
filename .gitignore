@@ -1,0 +1,7 @@
+.env
+venv/
+.dockerignore
+notes.md
+project_notes.md
+ __pycache__/
+ generated_docs/
