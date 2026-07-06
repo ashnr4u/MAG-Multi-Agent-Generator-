@@ -16,14 +16,14 @@ class SimpleAgent:
             model_name=model_name
         )
 
-        # 🔥 NEW: small summarizer model (prevents TPM overflow)
         self.summarizer_llm = ChatGroq(
             temperature=0.3,
             groq_api_key=os.getenv("GROQ_API_KEY"),
             model_name=model_name
         )
 
-        self.MAX_TASK_OUTPUT_CHARS = 2500  # prevents token explosion
+        #context limit exceeded so add to prevents token explosion
+        self.MAX_TASK_OUTPUT_CHARS = 2500  
 
         self.workflow = self._build_workflow()
         self.app = self.workflow.compile()
@@ -58,25 +58,60 @@ class SimpleAgent:
         return "executor" if state["current_task"] < len(state["tasks"]) else "summarizer"
 
     # ---------------- PLANNER ---------------- #
-
+    
     def plan_tasks(self, state: Dict) -> Dict:
         request = state.get("request", "")
 
         prompt = ChatPromptTemplate.from_messages([
             ("system",
-             "Break the request into 3-5 short, actionable tasks. "
-             "Each task must be one line only."),
+            "Break the request into 3-5 short, actionable tasks. "
+            "Each task must be one line only."),
             ("user", request)
         ])
 
         chain = prompt | self.llm
-        response = chain.invoke({})
 
-        tasks = [
-            t.strip("-• ").strip()
-            for t in response.content.split("\n")
-            if len(t.strip()) > 5
-        ][:5]
+        # Retry planner once if it fails to generate valid tasks
+        max_attempts = 2
+
+        for attempt in range(max_attempts):
+            try:
+                response = chain.invoke({})
+            except Exception as e:
+                return {
+                    "request": request,
+                    "tasks": [],
+                    "current_task": 0,
+                    "results": {},
+                    "errors": [f"Planner error: {str(e)}"],
+                    "final_output": (
+                        "The planner failed due to an API or model error. "
+                        "Please try again."
+                    )
+                }
+
+            tasks = [
+                t.strip("-• ").strip()
+                for t in response.content.split("\n")
+                if len(t.strip()) > 5
+            ][:5]
+
+            if tasks:
+                    break
+
+        else:
+            # Executed only if both attempts failed
+            return {
+                "request": request,
+                "tasks": [],
+                "current_task": 0,
+                "results": {},
+                "errors": ["Planner failed to generate tasks after retry."],
+                "final_output": (
+                    "Unable to generate a task plan. "
+                    "Please try rephrasing your request."
+                )
+            }
 
         return {
             "request": request,
@@ -106,10 +141,15 @@ class SimpleAgent:
         ])
 
         chain = prompt | self.llm
-        response = chain.invoke({})
+        try:
+            response = chain.invoke({})
+            result = response.content[:self.MAX_TASK_OUTPUT_CHARS]
+        except Exception as e:
+            result = f"Task failed: {str(e)}"
 
-        # 🔥 NEW: hard trim to avoid token explosion
-        result = response.content[:self.MAX_TASK_OUTPUT_CHARS]
+            state["errors"].append(
+                f"Task {i + 1} ({task}): {str(e)}"
+            )
 
         state["results"][f"task_{i}"] = {
             "task": task,
@@ -124,6 +164,8 @@ class SimpleAgent:
     # ---------------- SUMMARIZER ---------------- #
 
     def summarize_results(self, state: Dict) -> Dict:
+        if not state["tasks"]:
+            return state
         tasks = state["tasks"]
         results = state["results"]
 
@@ -132,7 +174,7 @@ class SimpleAgent:
             for i in range(len(tasks))
         ])
 
-        # 🔥 NEW: chunk-safe summarization prompt
+      
         prompt = ChatPromptTemplate.from_messages([
             ("system",
              "Convert the content into a concise professional document. "
@@ -141,11 +183,19 @@ class SimpleAgent:
         ])
 
         chain = prompt | self.summarizer_llm
-        response = chain.invoke({})
+        try:
+            response = chain.invoke({})
+            final_output = response.content[:8000]
+        except Exception as e:
+            state["errors"].append(f"Summarizer error: {str(e)}")
 
+            # Fall back to the raw combined results
+            final_output = combined
+
+        
         return {
             **state,
-            "final_output": response.content[:8000]  # safety cap
+            "final_output": final_output
         }
 
     # ---------------- ENTRY ---------------- #
