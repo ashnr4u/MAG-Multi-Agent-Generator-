@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_groq import ChatGroq
 from langchain.prompts import ChatPromptTemplate
@@ -7,8 +7,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+#the structure of the data
+class AgentState(TypedDict):
+    request: str
+    tasks: List[str]
+    current_task: int
+    results: Dict[str, Any]
+    errors: List[str]
+    final_output: str
+
 
 class SimpleAgent:
+    # Initializes the AI models, configures the workflow, and prepares the agent for execution.
     def __init__(self, model_name="openai/gpt-oss-120b"):
         self.llm = ChatGroq(
             temperature=0.7,
@@ -31,7 +41,7 @@ class SimpleAgent:
     # ---------------- WORKFLOW ---------------- #
 
     def _build_workflow(self):
-        workflow = StateGraph(dict)
+        workflow = StateGraph(AgentState)
 
         workflow.add_node("planner", self.plan_tasks)
         workflow.add_node("executor", self.execute_task)
@@ -40,7 +50,8 @@ class SimpleAgent:
         workflow.set_entry_point("planner")
 
         workflow.add_edge("planner", "executor")
-
+        
+        # Dynamically decides whether to continue executing tasks or move to the summarizer.
         workflow.add_conditional_edges(
             "executor",
             self.should_continue,
@@ -54,12 +65,12 @@ class SimpleAgent:
 
         return workflow
 
-    def should_continue(self, state: Dict):
+    def should_continue(self, state: AgentState) -> str:
         return "executor" if state["current_task"] < len(state["tasks"]) else "summarizer"
 
     # ---------------- PLANNER ---------------- #
     
-    def plan_tasks(self, state: Dict) -> Dict:
+    def plan_tasks(self, state: AgentState) -> AgentState:
         request = state.get("request", "")
 
         prompt = ChatPromptTemplate.from_messages([
@@ -97,7 +108,7 @@ class SimpleAgent:
             ][:5]
 
             if tasks:
-                    break
+                break
 
         else:
             # Executed only if both attempts failed
@@ -118,12 +129,13 @@ class SimpleAgent:
             "tasks": tasks,
             "current_task": 0,
             "results": {},
-            "errors": []
+            "errors": [],
+            "final_output": ""  # Empty string - will be filled by summarizer
         }
 
     # ---------------- EXECUTOR ---------------- #
 
-    def execute_task(self, state: Dict) -> Dict:
+    def execute_task(self, state: AgentState) -> AgentState:
         tasks = state["tasks"]
         i = state["current_task"]
 
@@ -146,7 +158,6 @@ class SimpleAgent:
             result = response.content[:self.MAX_TASK_OUTPUT_CHARS]
         except Exception as e:
             result = f"Task failed: {str(e)}"
-
             state["errors"].append(
                 f"Task {i + 1} ({task}): {str(e)}"
             )
@@ -163,9 +174,14 @@ class SimpleAgent:
 
     # ---------------- SUMMARIZER ---------------- #
 
-    def summarize_results(self, state: Dict) -> Dict:
+    def summarize_results(self, state: AgentState) -> AgentState:
         if not state["tasks"]:
-            return state
+            # No tasks completed - return error state
+            return {
+                **state,
+                "final_output": "No tasks were generated. Please try again with a clearer request."
+            }
+        
         tasks = state["tasks"]
         results = state["results"]
 
@@ -174,7 +190,6 @@ class SimpleAgent:
             for i in range(len(tasks))
         ])
 
-      
         prompt = ChatPromptTemplate.from_messages([
             ("system",
              "Convert the content into a concise professional document. "
@@ -188,11 +203,9 @@ class SimpleAgent:
             final_output = response.content[:8000]
         except Exception as e:
             state["errors"].append(f"Summarizer error: {str(e)}")
-
             # Fall back to the raw combined results
             final_output = combined
 
-        
         return {
             **state,
             "final_output": final_output
@@ -200,14 +213,14 @@ class SimpleAgent:
 
     # ---------------- ENTRY ---------------- #
 
-    def process_request(self, request: str) -> Dict[str, Any]:
-        initial_state = {
-            "request": request,
-            "tasks": [],
-            "current_task": 0,
-            "results": {},
-            "errors": [],
-            "final_output": ""
-        }
+    def process_request(self, request: str) -> AgentState:
+        initial_state = AgentState(
+            request=request,
+            tasks=[],
+            current_task=0,
+            results={},
+            errors=[],
+            final_output=""
+        )
 
         return self.app.invoke(initial_state)
