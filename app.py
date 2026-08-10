@@ -7,13 +7,17 @@ import os
 from agent_graph import SimpleAgent
 from document_gen import DocumentGenerator
 
+# Initialize the  application and document generator.
 app = FastAPI(title="AI Agent API")
 doc_gen = DocumentGenerator()
 
+
+#incoming request schema
 class AgentRequest(BaseModel):
     request: str
-    model_name: Optional[str] = "openai/gpt-oss-120b"  # Default to your model
+    model_name: Optional[str] = "openai/gpt-oss-120b"  
 
+#response schema
 class AgentResponse(BaseModel):
     request: str
     tasks: List[str]
@@ -24,9 +28,10 @@ class AgentResponse(BaseModel):
     status: str
     model_used: str
 
+#request to the workflow, Process user request and generate document.
 @app.post("/agent", response_model=AgentResponse)
 async def process_request(req: AgentRequest):
-    """Process user request and generate document"""
+    
     try:
         start_time = time.time()
         
@@ -57,9 +62,10 @@ async def process_request(req: AgentRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+#  Download generated document
 @app.get("/download/{filename}")
 async def download_document(filename: str):
-    """Download generated document"""
+  
     filepath = os.path.join("generated_docs", filename)
     if os.path.exists(filepath):
         return FileResponse(
@@ -69,6 +75,7 @@ async def download_document(filename: str):
         )
     raise HTTPException(status_code=404, detail="Document not found")
 
+#Health check endpoint
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""

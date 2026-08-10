@@ -2,6 +2,8 @@
 
 A multi-agent AI application built with **LangGraph**, **FastAPI**, and **Streamlit** that transforms natural language requests into professional Microsoft Word documents. The system automatically plans a request, executes each task using an LLM, summarizes the results, and generates a downloadable `.docx` report.
 
+Demo_snapshot: https://drive.google.com/drive/folders/1f6iL-p0XGQl48zF1WJ9oXWnntOi2xXbR?usp=sharing
+
 ## Features
 
 * Multi-agent workflow using LangGraph
